@@ -9,6 +9,11 @@ interface IERC20Demo { function transfer(address to, uint256 amount) external re
 contract TestVault is AbstractCallback {
     address public immutable owner;
     address public immutable asset;
+    // Demo RCAMP uses 18 decimals. Lifetime limits apply to successful withdrawals.
+    uint256 public constant MAX_PER_WITHDRAWAL = 10 ether;
+    uint256 public constant MAX_TOTAL_WITHDRAWN = 50 ether;
+    uint256 public totalWithdrawn;
+    mapping(uint256 => bool) public processedSourceTx;
     bool public paused;
     uint256 public lastSourceTx;
     uint256 public lastAmount;
@@ -23,6 +28,8 @@ contract TestVault is AbstractCallback {
     function pauseByRule(address reactive_, uint256 sourceTx_, uint256 amount_)
         external onlyServiceProvider onlyCallbackSender(reactive_)
     {
+        require(!processedSourceTx[sourceTx_], "event already processed");
+        processedSourceTx[sourceTx_] = true;
         paused = true;
         lastSourceTx = sourceTx_;
         lastAmount = amount_;
@@ -32,6 +39,9 @@ contract TestVault is AbstractCallback {
         require(msg.sender == owner, "owner only");
         require(!paused, "vault paused");
         require(to != address(0), "zero address");
+        require(amount > 0 && amount <= MAX_PER_WITHDRAWAL, "per withdrawal limit");
+        require(totalWithdrawn + amount <= MAX_TOTAL_WITHDRAWN, "total withdrawal limit");
+        totalWithdrawn += amount;
         emit Withdrawn(to, amount);
         require(IERC20Demo(asset).transfer(to, amount), "transfer failed");
     }

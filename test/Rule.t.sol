@@ -74,6 +74,22 @@ contract RuleTest is Test {
         assertEq(system.removed(),1); assertEq(monitor.lastAmount(),10 ether); assertEq(monitor.lastSourceTx(),0xabc);
     }
     function test_callbackRejectsDirectCaller() public {vm.expectRevert(); vault.pauseByRule(address(monitor),1,10 ether);}
+    function test_duplicateCallbackCannotPauseAgainAfterResume() public {
+        bytes memory payload = abi.encodeWithSignature("pauseByRule(address,uint256,uint256)", address(0), 0xabc, 10 ether);
+        assertTrue(proxy.deliver(address(vault), address(monitor), payload));
+        vault.resume();
+        assertFalse(proxy.deliver(address(vault), address(monitor), payload));
+        assertFalse(vault.paused());
+    }
+    function test_withdrawalLimitsAndAccounting() public {
+        vm.expectRevert(bytes("per withdrawal limit")); vault.withdraw(address(this), 11 ether);
+        assertEq(vault.totalWithdrawn(), 0);
+        for (uint256 i = 0; i < 5; i++) vault.withdraw(address(this), 10 ether);
+        assertEq(vault.totalWithdrawn(), 50 ether);
+        vm.expectRevert(bytes("total withdrawal limit")); vault.withdraw(address(this), 1 ether);
+        assertEq(vault.totalWithdrawn(), 50 ether);
+        assertEq(token.balanceOf(address(vault)), 50 ether);
+    }
     function test_callbackRejectsWrongReactive() public {
         bytes memory payload=abi.encodeWithSignature("pauseByRule(address,uint256,uint256)",address(0),1,10 ether);
         assertFalse(proxy.deliver(address(vault),address(0xaaaa),payload)); assertFalse(vault.paused());
