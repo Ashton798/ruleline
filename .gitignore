@@ -1,0 +1,8 @@
+out/
+cache/
+node_modules/
+.local-dependency-reference
+dist/
+.env
+.env.*
+!.env.example

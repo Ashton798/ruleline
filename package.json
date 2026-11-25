@@ -1,0 +1,8 @@
+{
+  "name": "chain-rule-interpreter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"dev":"vite --host 127.0.0.1", "build":"vite build", "test:parser":"node --test web/parser.test.js", "test:agent":"node --test server/agent.test.mjs", "agent":"node server/agent.mjs"},
+  "dependencies": {"ethers":"^6.15.0", "react":"^19.1.0", "react-dom":"^19.1.0", "vite":"^7.0.0"}
+}
