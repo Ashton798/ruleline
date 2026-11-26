@@ -48,3 +48,27 @@ npm run dev -- --port 4177
 - 在确认网络、目标地址和费用后，可通过对应系统合约或目标链代理的 `depositTo(address)` 为欠费合约充值并清偿欠费；充值交易须本人核对和签名。具体方法和当前地址见 [官方费用文档](https://dev.reactive.network/economy)。充值并不自动重新订阅已退订的本项目规则。
 - 如果目标链回调交易失败，先用目标链收据、代理日志和金库状态确认结果；区块确认不代表执行成功。请求已成功后本项目规则会退订，不会自动重试；要再次执行需要重新部署规则并绑定新的金库。已消耗的测试网 Gas 不会因失败退回。
 - 监听合约内请求回调或退订本身发生 revert 时，整笔 react 事务会回滚；本地测试覆盖该情况。目标链后续失败不回滚已经成功的 Lasna 交易。
+
+## 已部署地址（已验证的 2026-11-25 演示）
+
+| 角色 | 网络 | 合约地址 |
+| --- | --- | --- |
+| 源代币 RCAMP（已有测试代币） | Ethereum Sepolia | [0x96E9530cc78599b115a0e5e5873a2E88F661a977](https://sepolia.etherscan.io/address/0x96E9530cc78599b115a0e5e5873a2E88F661a977) |
+| 监听合约 RuleMonitor | Reactive Lasna | [0x8F48514E08e92E3804895987C92F19Cc2e704A1D](https://lasna.reactscan.net/address/0x8F48514E08e92E3804895987C92F19Cc2e704A1D) |
+| 接收合约 TestVault | Ethereum Sepolia | [0x9943C61014F6227C72EFAD4FB14A777BC38720Ef](https://sepolia.etherscan.io/address/0x9943C61014F6227C72EFAD4FB14A777BC38720Ef) |
+| 官方 Callback Proxy | Ethereum Sepolia | [0xAa14d9Cd0f788Ca23d11805986C1d8bd035D23b4](https://sepolia.etherscan.io/address/0xAa14d9Cd0f788Ca23d11805986C1d8bd035D23b4) |
+
+旧版链上演示和当前源码不同：`a409f73` 增加的金库去重和提款上限仅在本地测试，旧地址不包含它们；不要用旧交易宣称新增保护已在链上验证。
+
+## 手动验证与重新部署
+
+1. 打开上方三笔交易；分别核对交易成功、Reactive 的 `PauseRequested`、目标合约的 `VaultPaused`。两条事件均记录同一源交易哈希 `0x507a68b74952968b2c03af7408282815206097bf5e3e2a2abc99b9ce2daa24e0`，目标金库 `paused()` 为 true。
+2. 本项目使用一次性订阅，已经触发过的监听合约不会对新转账再次执行。如果想演示新版保护，需要用测试钱包和测试币重新部署一组监听合约及金库、先绑定再发送测试转账；先检查规则、网络、账户和费用，在 MetaMask 本人逐笔签名。
+3. 页面用钱包连接 Account 2，按部署清单依次在 Lasna 部署监听合约、在 Sepolia 部署测试金库、在 Lasna 绑定，再在 Sepolia 用指定账户自转阈值数量的 RCAMP；链上状态以交易收据和合约日志为准。
+4. 费用、网络地址和水龙头可能变化，部署前重新对照 [官方网络表](https://dev.reactive.network/origins-and-destinations) 与 [费用文档](https://dev.reactive.network/economy)。不得提交助记词、私钥或 API Key。项目仅为未经审计的测试网 Demo，不保护其他协议，也不能阻止已经发生的源链转账。
+
+## AI 使用与验证
+
+本项目由开发者借助 Codex 等 AI 编程工具协助构思、实现和排查；合约、测试、前端及文档包含 AI 辅助生成或修改的内容。通过 Foundry 本地测试和三笔可公开核验的测试网交易交叉检查，链上旧版和本地保护新版的证据分别标注。检查和测试不能替代安全审计。
+
+项目提供可选的外部模型接口来生成待人工核对的候选规则或解释状态；模型可能失败、收费或误解输入，不可自行签名或发送交易。本次展示的三笔链上交易证明规则链路运行，不能证明 AI 模型参与了这次运行。若申请 Reactive Meets AI 赛道，仍需完成并验证运行时 AI 的输入、输出及其在实际流程中的作用。
