@@ -26,7 +26,7 @@ contract TestVault is AbstractCallback {
         asset = asset_;
     }
     function pauseByRule(address reactive_, uint256 sourceTx_, uint256 amount_)
-        external onlyServiceProvider onlyCallbackSender(reactive_)
+        public virtual onlyServiceProvider onlyCallbackSender(reactive_)
     {
         require(!processedSourceTx[sourceTx_], "event already processed");
         processedSourceTx[sourceTx_] = true;

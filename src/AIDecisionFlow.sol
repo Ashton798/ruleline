@@ -5,6 +5,7 @@ import {AbstractReactive} from "@reactive/src/base/AbstractReactive.sol";
 import {AbstractCallback} from "@reactive/src/base/AbstractCallback.sol";
 import {ISystemContract} from "@reactive/src/interfaces/ISystemContract.sol";
 import {IPayable} from "@reactive/src/interfaces/IPayable.sol";
+import {TestVault} from "./TestVault.sol";
 
 /// @notice Testnet-only decision inbox. The model never has signing authority.
 contract AIDecisionGate is AbstractCallback {
@@ -17,8 +18,10 @@ contract AIDecisionGate is AbstractCallback {
     uint256 public immutable maxPauseDecisions;
     uint64 public immutable decisionWindow;
     uint256 public pauseDecisions;
+    uint256 public latestSourceTx;
     bool public disabled;
     mapping(uint256 => Request) public requests;
+    mapping(uint256 => bool) public pauseAuthorized;
     event DecisionNeeded(uint256 indexed sourceTx, uint256 amount, uint64 deadline);
     event DecisionAccepted(uint256 indexed sourceTx, uint256 amount, uint8 action, uint64 deadline);
     event RequestCancelled(uint256 indexed sourceTx);
@@ -37,6 +40,7 @@ contract AIDecisionGate is AbstractCallback {
         require(!disabled && sourceTx != 0 && amount > 0 && !requests[sourceTx].exists, "invalid request");
         uint64 deadline = uint64(block.timestamp + decisionWindow);
         requests[sourceTx] = Request(amount, deadline, true, false);
+        latestSourceTx = sourceTx;
         emit DecisionNeeded(sourceTx, amount, deadline);
     }
     /// @dev Only the fixed agent account or owner can submit. Action 0 is a no-op.
@@ -48,6 +52,7 @@ contract AIDecisionGate is AbstractCallback {
         if (action == PAUSE_TEST_VAULT) {
             require(r.amount <= maxObservedAmount && pauseDecisions < maxPauseDecisions, "limit exceeded");
             pauseDecisions++;
+            pauseAuthorized[sourceTx] = true;
         }
         r.resolved = true;
         emit DecisionAccepted(sourceTx, r.amount, action, r.deadline);
@@ -57,6 +62,30 @@ contract AIDecisionGate is AbstractCallback {
         requests[sourceTx].resolved = true; emit RequestCancelled(sourceTx);
     }
     function disable() external { require(msg.sender == owner, "owner only"); disabled = true; emit Disabled(); }
+
+    function canExecutePause(uint256 sourceTx, uint256 amount) external view returns (bool) {
+        Request storage request = requests[sourceTx];
+        return !disabled && pauseAuthorized[sourceTx] && request.amount == amount && block.timestamp <= request.deadline;
+    }
+}
+
+/// @notice Rechecks the authorization on Sepolia when the second callback arrives.
+contract AIDecisionVault is TestVault {
+    AIDecisionGate public immutable decisionGate;
+
+    constructor(IPayable proxy, address relay, address asset_, AIDecisionGate gate)
+        payable TestVault(proxy, relay, asset_)
+    {
+        require(address(gate).code.length > 0, "invalid gate");
+        decisionGate = gate;
+    }
+
+    function pauseByRule(address reactive, uint256 sourceTx, uint256 amount)
+        public override onlyServiceProvider onlyCallbackSender(reactive)
+    {
+        require(decisionGate.canExecutePause(sourceTx, amount), "pause not authorized");
+        super.pauseByRule(reactive, sourceTx, amount);
+    }
 }
 
 /// @notice Routes only the gate's whitelisted decision event to a fixed vault.

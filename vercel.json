@@ -2,5 +2,8 @@
   "framework": "vite",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
-  "functions": {"api/[...path].js": {"maxDuration": 60}}
+  "functions": {
+    "api/[...path].js": {"maxDuration": 60},
+    "api/event-agent.js": {"maxDuration": 60}
+  }
 }

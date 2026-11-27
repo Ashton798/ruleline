@@ -5,8 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {IReactive} from "@reactive/src/interfaces/IReactive.sol";
 import {ISystemContract} from "@reactive/src/interfaces/ISystemContract.sol";
 import {IPayable} from "@reactive/src/interfaces/IPayable.sol";
-import {AIEventObserver,AIDecisionGate,AIDecisionRelay} from "../src/AIDecisionFlow.sol";
-import {TestVault} from "../src/TestVault.sol";
+import {AIEventObserver,AIDecisionGate,AIDecisionRelay,AIDecisionVault} from "../src/AIDecisionFlow.sol";
 import {MockSystem,MockProxy,MockToken} from "./Rule.t.sol";
 
 contract AIDecisionFlowTest is Test {
@@ -14,14 +13,15 @@ contract AIDecisionFlowTest is Test {
     address constant AGENT=address(0xa11);
     address constant SENDER=address(0x1234);
     MockSystem system; MockProxy proxy; MockToken token;
-    AIEventObserver observer; AIDecisionGate gate; AIDecisionRelay relay; TestVault vault;
+    AIEventObserver observer; AIDecisionGate gate; AIDecisionRelay relay; AIDecisionVault vault;
     function setUp() public {
         MockSystem mock=new MockSystem(); vm.etch(SYSTEM,address(mock).code); system=MockSystem(SYSTEM);
         proxy=new MockProxy(); token=new MockToken();
         observer=new AIEventObserver(address(token),SENDER,10 ether);
         gate=new AIDecisionGate(IPayable(payable(address(proxy))),address(observer),AGENT,20 ether,1,300);
         observer.setGate(address(gate)); relay=new AIDecisionRelay(address(gate));
-        vault=new TestVault(IPayable(payable(address(proxy))),address(relay),address(token)); relay.setVault(address(vault));
+        vault=new AIDecisionVault(IPayable(payable(address(proxy))),address(relay),address(token),gate);
+        relay.setVault(address(vault));
     }
     function transferRecord(uint256 amount) internal view returns (IReactive.LogRecord memory l) {
         l.chainId=11155111; l.contractAddress=address(token); l.topic0=uint256(keccak256("Transfer(address,address,uint256)"));
@@ -74,6 +74,22 @@ contract AIDecisionFlowTest is Test {
         assertTrue(proxy.deliver(address(gate),address(observer),payload));
         vm.prank(AGENT); vm.expectRevert(bytes("limit exceeded")); gate.submitDecision(0xdef,1);
         gate.submitDecision(0xdef,0);
+    }
+    function test_vaultRechecksPauseAndOwnerCanStopInFlightCallback() public {
+        createRequest(10 ether);
+        bytes memory payload=abi.encodeCall(vault.pauseByRule,(address(0),0xabc,10 ether));
+        assertFalse(proxy.deliver(address(vault),address(relay),payload));
+        vm.prank(AGENT); gate.submitDecision(0xabc,1);
+        gate.disable();
+        assertFalse(proxy.deliver(address(vault),address(relay),payload));
+        assertFalse(vault.paused());
+    }
+    function test_vaultRejectsExpiredSecondCallback() public {
+        createRequest(10 ether);
+        vm.prank(AGENT); gate.submitDecision(0xabc,1);
+        vm.warp(block.timestamp+301);
+        bytes memory payload=abi.encodeCall(vault.pauseByRule,(address(0),0xabc,10 ether));
+        assertFalse(proxy.deliver(address(vault),address(relay),payload));
     }
     function test_relayRejectsUntrustedOrExpiredAndDeduplicates() public {
         IReactive.LogRecord memory l=decisionRecord(1,10 ether,1,uint64(block.timestamp+30));
