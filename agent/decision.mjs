@@ -29,7 +29,9 @@ export async function recommendDecision(context, {endpoint, complete, fetchImpl 
   }
   const prompt = 'You are evaluating a TESTNET rule. Return ONLY strict JSON, with exactly two keys: {"action":"pause"|"skip"|"manual","reason":"brief explanation"}. '
     + 'The only executable action is to request a pause of this project test vault. It cannot prevent or undo a transfer. '
-    + 'If you cannot decide from the supplied information, choose manual. '
+    + 'Apply this test policy: a transfer that reaches the threshold and is within the allowed maximum should pause a running vault. '
+    + 'Choose skip if the vault is already paused. Choose manual if required facts are missing or contradictory. '
+    + (typeof context.vaultPaused === 'boolean' ? `Vault paused: ${context.vaultPaused}. ` : '')
     + `Observed single-transfer amount in wei: ${context.amountWei}. Trigger threshold in wei: ${context.thresholdWei}. Allowed maximum amount in wei: ${context.maxAmountWei}.`;
   try {
     const answer = await complete(prompt);
@@ -39,6 +41,7 @@ export async function recommendDecision(context, {endpoint, complete, fetchImpl 
     if (!candidate || Array.isArray(candidate) || Object.keys(candidate).sort().join(',') !== 'action,reason'
         || !['pause','skip','manual'].includes(candidate.action) || typeof candidate.reason !== 'string'
         || !candidate.reason.trim() || candidate.reason.length > 500) return manual('invalid_model_response');
+    if (context.vaultPaused === true && candidate.action === 'pause') return manual('vault_already_paused');
     return {action:candidate.action,reason:candidate.reason.trim()};
   } catch { return manual('model_unavailable'); }
 }

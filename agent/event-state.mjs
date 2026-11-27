@@ -78,11 +78,12 @@ export async function inspectEventState(env) {
       deadline: new Date(Number(request.deadline) * 1000).toISOString(), approvedPause, executionObserved: executed, vaultPaused: paused};
     if (executed) return {...details, stage: paused ? 'pause_confirmed' : 'previously_paused'};
     if (disabled) return {...details, stage: 'disabled'};
-    if (request.resolved) return {...details, stage: approvedPause ? relayed ? 'awaiting_vault_callback' : 'awaiting_decision_relay' : 'resolved_without_pause'};
+    if (request.resolved && !approvedPause) return {...details, stage: 'resolved_without_pause'};
     if (request.deadline < BigInt(head.timestamp)) return {...details, stage: 'expired'};
+    if (request.resolved) return {...details, stage: relayed ? 'awaiting_vault_callback' : 'awaiting_decision_relay'};
     if (confirmedTx !== sourceTx) return {...details, stage: 'awaiting_confirmations'};
     return {...details, stage: 'awaiting_decision',
-      context: {amountWei: request.amount.toString(), thresholdWei: threshold.toString(), maxAmountWei: limit.toString()},
+      context: {amountWei: request.amount.toString(), thresholdWei: threshold.toString(), maxAmountWei: limit.toString(), vaultPaused: paused},
       decisionTransaction: action => ({
         chainId: SEPOLIA, to: AI_FLOW_GATE, value: '0x0',
         data: gate.interface.encodeFunctionData('submitDecision', [sourceTx, action === 'pause' ? 1 : 0])

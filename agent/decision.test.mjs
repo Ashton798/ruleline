@@ -8,6 +8,7 @@ test('accepts only the three fixed decisions',async()=>{
   assert.equal((await recommendDecision(context,{endpoint,fetchImpl:model('{"action":"pause","reason":"threshold met"}')})).action,'pause');
   assert.equal((await recommendDecision(context,{endpoint,fetchImpl:model('{"action":"withdraw","reason":"x"}')})).action,'manual');
   assert.equal((await recommendDecision(context,{endpoint,fetchImpl:model('{"action":"pause","reason":"x","to":"other"}')})).action,'manual');
+  assert.equal((await recommendDecision({...context,vaultPaused:true},{endpoint,fetchImpl:model('{"action":"pause","reason":"x"}')})).reason,'vault_already_paused');
 });
 test('invalid, unavailable and out-of-limit cases fall back to a person',async()=>{
   let calls=0; const fetchImpl=async()=>{calls++; throw Error('unavailable')};
