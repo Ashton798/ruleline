@@ -1,7 +1,12 @@
 // Accept only a complete, unambiguous sentence describing the supported rule.
+export function englishRuleToChinese(text) {
+  if (typeof text !== 'string') return null;
+  const match = text.trim().match(/^when (?:the )?specified account transfers at least (\d+(?:\.\d+)?) RCAMP in (?:a single|one) transaction,\s*pause (?:withdrawals from )?the test vault\.?$/i);
+  return match ? `当指定账户单笔转出达到 ${match[1]} RCAMP 时，暂停测试金库。` : null;
+}
 export function parseRule(text) {
   if (typeof text !== 'string' || !text.trim()) throw new Error('请输入完整规则。');
-  const rule = text.trim();
+  const rule = englishRuleToChinese(text) || text.trim();
   if (!/(指定|监控)账户/.test(rule)) throw new Error('请写明由指定账户转出。');
   if (!/(转账|转出)/.test(rule)) throw new Error('请写明指定账户转出 RCAMP。');
   if (!/RCAMP/i.test(rule)) throw new Error('请写明转出的代币为 RCAMP。');

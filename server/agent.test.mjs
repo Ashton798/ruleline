@@ -26,6 +26,38 @@ async function setup(t, {model, env: overrides = {}, fetchImpl} = {}) {
   return {request, calls, authorization};
 }
 
+test('chat forwards text and validates media attachments', async t => {
+  const {request,calls} = await setup(t,{model:'A real answer'});
+  const response = await request('/api/chat',{messages:[{role:'user',content:'你好'}]});
+  assert.deepEqual(response.body,{source:'AI',answer:'A real answer'});
+  assert.equal(JSON.parse(calls[0].options.body).model,'test-model');
+  const media = await request('/api/chat',{messages:[{role:'user',content:'看图片'}],attachment:{data:'data:image/png;base64,YWJj'}});
+  assert.equal(media.status,200);
+  assert.equal(JSON.parse(calls[1].options.body).model,'qwen3-vl-plus');
+  assert.equal(JSON.parse(calls[1].options.body).messages[1].content[1].type,'image_url');
+  const video = await request('/api/chat',{messages:[{role:'user',content:'看视频'}],attachment:{data:'data:video/mp4;base64,YWJj'}});
+  assert.equal(video.status,200);
+  assert.equal(JSON.parse(calls[2].options.body).messages[1].content[1].type,'video_url');
+  assert.equal((await request('/api/chat',{messages:[{role:'user',content:'x'}],attachment:{data:'https://example.com/image.png'}})).status,400);
+});
+
+test('GLM 5.3 chat uses lighter reasoning without changing other providers', async t => {
+  const zhipu = await setup(t, {model:'Ready',env:{AI_BASE_URL:'https://open.bigmodel.cn/api/paas/v4',AI_MODEL:'glm-5.3-flash'}});
+  assert.equal((await zhipu.request('/api/chat',{messages:[{role:'user',content:'你好'}]})).status,200);
+  assert.equal(JSON.parse(zhipu.calls[0].options.body).reasoning_effort,'low');
+  const other = await setup(t,{model:'Ready',env:{AI_MODEL:'glm-5.3-flash'}});
+  await other.request('/api/chat',{messages:[{role:'user',content:'你好'}]});
+  assert.equal(JSON.parse(other.calls[0].options.body).reasoning_effort,undefined);
+});
+
+test('chat distinguishes timeout from connection errors', async t => {
+  const timeout = await setup(t,{fetchImpl:async()=>{throw Object.assign(new Error('private'),{name:'TimeoutError'})}});
+  const response = await timeout.request('/api/chat',{messages:[{role:'user',content:'你好'}]});
+  assert.equal(response.status,502);
+  assert.match(response.body.error,/超时/);
+  assert.doesNotMatch(response.body.error,/private/);
+});
+
 test('status exposes only safe provider and origin, and URL configuration is strict', async t => {
   const {request, authorization} = await setup(t, {env: {AI_PROVIDER: 'Example AI', AI_BASE_URL: 'https://example.invalid/v1/private-path'}});
   const status = await request('/api/status');
@@ -129,6 +161,12 @@ test('explanation uses only verified sentences and always includes required unce
     assert.match(result.body.explanation, /未达到规则阈值/);
     assert.match(result.body.explanation, /尚未观察到回调请求/);
     assert.match(result.body.explanation, /不足以确认回调成功/);
+  });
+  await t.test('a recorded callback error stays visible', async t => {
+    const {request} = await setup(t, {model: {factIds: ['threshold']}});
+    const result = await request('/api/explain', {text: JSON.stringify({threshold:'10',callbackRequested:true,callbackFailed:true})});
+    assert.equal(result.status,200);
+    assert.match(result.body.explanation,/系统回执记录了回调错误/);
   });
 });
 

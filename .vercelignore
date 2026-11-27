@@ -1,0 +1,9 @@
+.git
+.vercel
+node_modules
+out
+cache
+dist
+test
+lib
+outputs

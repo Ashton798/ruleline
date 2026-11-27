@@ -74,10 +74,10 @@ function explainFacts(text) {
   let facts;
   try { facts = JSON.parse(text); } catch { throw new Error('解释输入必须是包含链上状态的 JSON 对象。'); }
   if (!isObject(facts)) throw new Error('解释输入必须是包含链上状态的 JSON 对象。');
-  const allowed = ['threshold', 'latestObservedAmount', 'callbackRequested', 'vaultPaused', 'callbackMatchesSource'];
+  const allowed = ['threshold', 'latestObservedAmount', 'callbackRequested', 'callbackFailed', 'vaultPaused', 'callbackMatchesSource'];
   if (Object.keys(facts).some(key => !allowed.includes(key))) throw new Error('解释输入包含不支持的状态字段。');
   if (!validAmount(facts.threshold, true) || ('latestObservedAmount' in facts && !validAmount(facts.latestObservedAmount))) throw new Error('阈值和观察金额必须是有效的数字字符串。');
-  for (const key of ['callbackRequested', 'vaultPaused', 'callbackMatchesSource']) {
+  for (const key of ['callbackRequested', 'callbackFailed', 'vaultPaused', 'callbackMatchesSource']) {
     if (key in facts && typeof facts[key] !== 'boolean') throw new Error('回调和金库状态必须是布尔值。');
   }
   const sentences = {threshold: `规则阈值为 ${facts.threshold} RCAMP。`};
@@ -87,6 +87,7 @@ function explainFacts(text) {
       ? '这笔金额达到或超过规则阈值。' : '这笔金额未达到规则阈值。';
   }
   if ('callbackRequested' in facts) sentences.callbackRequested = facts.callbackRequested ? '已请求回调，但这不代表回调已执行。' : '尚未观察到回调请求。';
+  if (facts.callbackFailed === true) sentences.callbackFailed = '系统回执记录了回调错误，请查看目标链交易。';
   if ('vaultPaused' in facts) sentences.vaultPaused = facts.vaultPaused ? '当前读取到金库已暂停。' : '当前读取到金库未暂停。';
   if ('callbackMatchesSource' in facts) sentences.callbackMatchesSource = facts.callbackMatchesSource ? '记录显示回调与源交易匹配。' : '尚未证实回调与源交易匹配。';
   if (facts.callbackMatchesSource !== true) sentences.uncertain = '现有信息不足以确认回调成功，也不能确认金库因该规则暂停。';
@@ -97,14 +98,20 @@ function explainFacts(text) {
 const interpretSystem = '你是测试网规则翻译助手。理解用户中文，唯一支持指定账户单笔转出 RCAMP 的金额大于等于正数阈值后暂停本项目测试金库。单笔、转出方向、RCAMP、包含等于的阈值比较及暂停测试金库都必须明确；“当指定账户转账达到 10 RCAMP 时，暂停测试金库”表示单笔转账，可以支持。缺失、歧义、累计、额外条件或其他动作均不支持，不要猜测。只输出 JSON：不支持时为 {"supported":false}；支持时为 {"supported":true,"threshold":"原文中的十进制数字","senderAddress":null,"tokenAddress":null}。如果原文明确写有账户或代币地址，将对应字段填为原文地址；没有则为 null。不得将地址作为阈值。';
 const explainSystem = '你是测试网状态讲解助手。输入为事实 ID 与对应的已验证语句。仅选择并排序需要展示的事实 ID，输出 JSON：{"factIds":["事实ID"]}。不得输出语句、添加不存在的 ID 或重复 ID。';
 
-export function createAgentServer({env = process.env, fetchImpl = globalThis.fetch} = {}) {
-  return http.createServer(async (req, res) => {
+export function createAgentHandler({env = process.env, fetchImpl = globalThis.fetch} = {}) {
+  return async (req, res) => {
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     const reply = (code, data) => { res.statusCode = code; res.end(JSON.stringify(data)); };
-    if (req.headers.origin && req.headers.origin !== 'http://127.0.0.1:4177') return reply(403, {error: '来源不允许。'});
+    if (req.headers.origin) {
+      let allowed = req.headers.origin === 'http://127.0.0.1:4177';
+      if (env.VERCEL) {
+        try { const origin = new URL(req.headers.origin); allowed = origin.protocol === 'https:' && origin.host === req.headers.host; } catch { allowed = false; }
+      }
+      if (!allowed) return reply(403, {error: '来源不允许。'});
+    }
     const config = configuration(env);
     if (req.method === 'GET' && req.url === '/api/status') return reply(200, {configured: config.configured, provider: config.provider, endpoint: config.endpoint});
-    if (req.method !== 'POST' || !['/api/interpret', '/api/explain'].includes(req.url)) return reply(404, {error: '接口不存在。'});
+    if (req.method !== 'POST' || !['/api/interpret', '/api/explain', '/api/chat'].includes(req.url)) return reply(404, {error: '接口不存在。'});
     if (!/^application\/json(?:\s*;|\s*$)/i.test(req.headers['content-type'] || '')) return reply(415, {error: '需要 JSON 输入。'});
     if (!config.configured) return reply(503, {error: 'AI 服务尚未配置或服务地址无效，请检查本机配置。'});
 
@@ -114,13 +121,41 @@ export function createAgentServer({env = process.env, fetchImpl = globalThis.fet
     try {
       for await (const part of req) {
         size += part.length;
-        if (size > MAX_BODY_BYTES) return reply(413, {error: '输入过长。'});
+        if (size > (req.url === '/api/chat' ? 9_000_000 : MAX_BODY_BYTES)) return reply(413, {error: '输入过长或附件超过大小限制。'});
         body += decoder.write(part);
       }
       body += decoder.end();
     } catch { return reply(400, {error: '无法读取请求。'}); }
     let input;
     try { input = JSON.parse(body); } catch { return reply(400, {error: '请输入有效的 JSON。'}); }
+    if (req.url === '/api/chat') {
+      if (!isObject(input) || !Array.isArray(input.messages) || !input.messages.length || input.messages.length > 12 || input.messages.some(message => !isObject(message) || !['user','assistant'].includes(message.role) || typeof message.content !== 'string' || message.content.length > 5000) || input.messages.at(-1).role !== 'user') return reply(400, {error:'对话内容无效或过长。'});
+      const attachment = input.attachment;
+      if (attachment !== undefined && (!isObject(attachment) || typeof attachment.data !== 'string' || !/^data:(image\/(png|jpeg|webp)|video\/(mp4|webm));base64,[A-Za-z0-9+/]+={0,2}$/.test(attachment.data) || attachment.data.length > 8_400_000)) return reply(400, {error:'附件格式不支持或文件超过 6 MB。'});
+      if (attachment && new URL(config.endpoint).hostname === 'open.bigmodel.cn') {
+        if (!/^data:image\/(png|jpeg);base64,/.test(attachment.data)) return reply(400,{error:'智谱模式目前支持 JPG、PNG 图片，本地视频上传尚未适配。'});
+        if (Buffer.byteLength(attachment.data.split(',')[1], 'base64') >= 5 * 1024 * 1024) return reply(400,{error:'智谱图片需要小于 5 MB。'});
+      }
+      if (!input.messages.at(-1).content.trim() && !attachment) return reply(400, {error:'请输入问题或选择附件。'});
+      const messages = input.messages.map(message => ({role:message.role, content:message.content}));
+      if (attachment) {
+        const video = attachment.data.startsWith('data:video/');
+        messages.at(-1).content = [{type:'text',text:messages.at(-1).content || '请描述这个附件。'}, video ? {type:'video_url',video_url:{url:attachment.data}} : {type:'image_url',image_url:{url:attachment.data}}];
+      }
+      try {
+        const model = attachment ? (env.AI_VISION_MODEL || 'qwen3-vl-plus') : env.AI_MODEL;
+        // GLM-5.3 defaults to its deepest reasoning level; interactive chat uses
+        // the provider's light reasoning setting to avoid long silent waits.
+        const interactiveOptions = new URL(config.endpoint).hostname === 'open.bigmodel.cn' && /^glm-5\.3(?:-|$)/i.test(model) ? {reasoning_effort:'low'} : {};
+        const system = {role:'system',content:'You are the Ruleline chat assistant. Answer in the user’s language. Chat cannot create or deploy rules, read chain state, use tools, or send transactions. Never claim an action happened. For rule requests, direct the user to Create a Rule. In this prototype ONLY one rule type is supported: monitor a specified account’s single transfer of RCAMP and request a pause of this project’s test vault after it meets a specified threshold. Do not claim the product supports arbitrary tokens, events, actions, smart contract calls or automatic deployment. Deploying contracts, binding and initiating a test transfer require the user to confirm wallet transactions; after deployment the Reactive Network requests the callback automatically without the user signing at trigger time. A request does not prove the callback arrived or succeeded. Do not invent onchain status.'};
+        const upstream = await fetchImpl(config.completionUrl, {method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+env.AI_API_KEY},body:JSON.stringify({model,messages:[system,...messages],...interactiveOptions}),signal:AbortSignal.timeout(120000),redirect:'error'});
+        if (!upstream.ok) return reply(502,{error:`AI 服务返回 HTTP ${upstream.status}，请检查模型权限、额度和地域。`});
+        const result = await upstream.json();
+        const answer = result?.choices?.[0]?.message?.content;
+        if (typeof answer !== 'string' || !answer.trim()) return reply(502,{error:'AI 服务未返回可显示的回答。'});
+        return reply(200,{answer,source:'AI'});
+      } catch (error) { const timedOut=error?.name==='TimeoutError'||error?.name==='AbortError'||error?.cause?.code==='UND_ERR_CONNECT_TIMEOUT'; return reply(502,{error:timedOut?'AI 回复超时，请稍后重试。模型可能仍在处理，请避免连续重复发送。':'无法连接 AI 服务，请检查网络和服务配置。'}); }
+    }
     if (!isObject(input) || typeof input.text !== 'string' || !input.text.trim() || input.text.length > 1000) return reply(400, {error: '输入无效，请提供不超过 1000 字的 text。'});
     const isExplain = req.url === '/api/explain';
     let sentences;
@@ -162,7 +197,11 @@ export function createAgentServer({env = process.env, fetchImpl = globalThis.fet
     } catch {
       return reply(502, {error: 'AI 服务已响应，但模型返回格式无法识别，请检查模型兼容性后重试。'});
     }
-  });
+  };
+}
+
+export function createAgentServer(options = {}) {
+  return http.createServer(createAgentHandler(options));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
